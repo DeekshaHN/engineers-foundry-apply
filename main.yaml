@@ -1,0 +1,286 @@
+---
+- name: Configure JavaScript React Application
+  hosts: react
+  become: yes
+
+  vars:
+    app_name: engineers-foundry-apply
+    app_dir: /opt/engineers-foundry-apply
+    repo_url: "https://github.com/DeekshaHN/engineers-foundry-apply.git"
+    nginx_root: /var/www/engineers-foundry-apply
+
+  tasks:
+
+    # -------------------------------
+    # 1. Update Package Repository
+    # -------------------------------
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    # -------------------------------
+    # 2. Install Required Packages
+    # -------------------------------
+
+    - name: Install Git, Curl and Nginx
+      apt:
+        name:
+          - git
+          - curl
+          - nginx
+        state: present
+
+    # -------------------------------
+    # 3. Install Node.js
+    # -------------------------------
+
+    - name: Install Node.js 20
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+        apt-get install -y nodejs
+      args:
+        creates: /usr/bin/node
+
+    # -------------------------------
+    # 4. Check Node.js Version
+    # -------------------------------
+
+    - name: Check Node.js version
+      command: node --version
+      register: node_version
+      changed_when: false
+
+    - name: Display Node.js version
+      debug:
+        msg: "Node.js version: {{ node_version.stdout }}"
+
+    # -------------------------------
+    # 5. Check npm Version
+    # -------------------------------
+
+    - name: Check npm version
+      command: npm --version
+      register: npm_version
+      changed_when: false
+
+    - name: Display npm version
+      debug:
+        msg: "npm version: {{ npm_version.stdout }}"
+
+    # -------------------------------
+    # 6. Create Application Directory
+    # -------------------------------
+
+    - name: Remove old application directory
+      file:
+        path: "{{ app_dir }}"
+        state: absent
+
+    - name: Create application directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: "0755"
+
+    # -------------------------------
+    # 7. Clone GitHub Repository
+    # -------------------------------
+
+    - name: Clone React application
+      git:
+        repo: "{{ repo_url }}"
+        dest: "{{ app_dir }}"
+        version: main
+        force: yes
+
+    # -------------------------------
+    # 8. Install Dependencies
+    # -------------------------------
+
+    - name: Install npm dependencies
+      command: npm install
+      args:
+        chdir: "{{ app_dir }}"
+
+    # -------------------------------
+    # 9. Build React Application
+    # -------------------------------
+
+    - name: Build React application
+      command: npm run build
+      args:
+        chdir: "{{ app_dir }}"
+
+    # -------------------------------
+    # 10. Verify Build
+    # -------------------------------
+
+    - name: Check React dist directory
+      stat:
+        path: "{{ app_dir }}/dist"
+      register: dist_directory
+
+    - name: Fail if React build does not exist
+      fail:
+        msg: "React build failed. dist directory does not exist."
+      when: not dist_directory.stat.exists
+
+    # -------------------------------
+    # 11. Create Nginx Web Root
+    # -------------------------------
+
+    - name: Remove old Nginx web root
+      file:
+        path: "{{ nginx_root }}"
+        state: absent
+
+    - name: Create Nginx web root
+      file:
+        path: "{{ nginx_root }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0755"
+
+    # -------------------------------
+    # 12. Copy React Build
+    # -------------------------------
+
+    - name: Copy React dist files to Nginx
+      copy:
+        src: "{{ app_dir }}/dist/"
+        dest: "{{ nginx_root }}/"
+        remote_src: yes
+
+    # -------------------------------
+    # 13. Fix Ownership
+    # -------------------------------
+
+    - name: Set ownership of React files
+      file:
+        path: "{{ nginx_root }}"
+        owner: www-data
+        group: www-data
+        recurse: yes
+
+    # -------------------------------
+    # 14. Fix Directory Permissions
+    # -------------------------------
+
+    - name: Set React directory permissions
+      shell: |
+        find {{ nginx_root }} -type d -exec chmod 755 {} \;
+
+    # -------------------------------
+    # 15. Fix File Permissions
+    # -------------------------------
+
+    - name: Set React file permissions
+      shell: |
+        find {{ nginx_root }} -type f -exec chmod 644 {} \;
+
+    # -------------------------------
+    # 16. Create Nginx Configuration
+    # -------------------------------
+
+    - name: Create React Nginx configuration
+      copy:
+        dest: /etc/nginx/sites-available/react-app
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          server {
+              listen 80;
+              listen [::]:80;
+
+              server_name _;
+
+              root {{ nginx_root }};
+              index index.html;
+
+              location / {
+                  try_files $uri $uri/ /index.html;
+              }
+          }
+
+    # -------------------------------
+    # 17. Remove Default Nginx Site
+    # -------------------------------
+
+    - name: Remove default Nginx configuration
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    # -------------------------------
+    # 18. Enable React Nginx Site
+    # -------------------------------
+
+    - name: Enable React Nginx configuration
+      file:
+        src: /etc/nginx/sites-available/react-app
+        dest: /etc/nginx/sites-enabled/react-app
+        state: link
+        force: yes
+
+    # -------------------------------
+    # 19. Test Nginx Configuration
+    # -------------------------------
+
+    - name: Test Nginx configuration
+      command: nginx -t
+      changed_when: false
+
+    # -------------------------------
+    # 20. Enable and Start Nginx
+    # -------------------------------
+
+    - name: Enable Nginx
+      systemd:
+        name: nginx
+        enabled: yes
+
+    - name: Start Nginx
+      systemd:
+        name: nginx
+        state: started
+
+    # -------------------------------
+    # 21. Restart Nginx
+    # -------------------------------
+
+    - name: Restart Nginx
+      systemd:
+        name: nginx
+        state: restarted
+
+    # -------------------------------
+    # 22. Check Nginx Status
+    # -------------------------------
+
+    - name: Check Nginx service
+      command: systemctl is-active nginx
+      register: nginx_status
+      changed_when: false
+
+    - name: Display Nginx status
+      debug:
+        msg: "Nginx is {{ nginx_status.stdout }}"
+
+    # -------------------------------
+    # 23. Test React Application
+    # -------------------------------
+
+    - name: Test React application
+      command: curl -I http://localhost
+      register: react_status
+      changed_when: false
+
+    - name: Display React application response
+      debug:
+        msg: "{{ react_status.stdout_lines }}"
